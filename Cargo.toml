@@ -6,3 +6,23 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+# Required for startup code
+cortex-m-rt = "0.7.3"
+# CPU peripheral access
+cortex-m = {version = "0.7.7", features = ["critical-section"]}
+# Required for safe interrupts
+critical-section = "1.1.2"
+# Basic hal
+embedded-hal = "1.0.0"
+# Implementation of the embedded hal for the rp2040
+#   Features:
+#      rt - minimal startup for peripheral
+#      critical-section-impl - implements critical section u8
+rp2040-hal = {version = "0.10.0", features = ["rt", "critical-section-impl"]}
+# Implements bootloader for rp2040
+rp2040-boot2 = "0.3.0"
+# Panic handler
+panic-halt = "0.2.0"
+# Everythink to make USB hid device
+usb-device = "0.3"
+usbd-hid = "0.7.0"

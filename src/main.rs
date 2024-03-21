@@ -1,9 +1,16 @@
 #![no_std]
 #![no_main]
 
-use rp2040_hal as hal;
-use hal::pac::{self,interrupt};
+extern crate alloc;
+
+use alloc::boxed::Box;
+use alloc::vec::{self, Vec};
+use alloc::*;
+use embedded_alloc::Heap;
+use embedded_hal::digital::{InputPin, OutputPin};
+use hal::pac::{self, interrupt};
 use hal::prelude::*;
+use rp2040_hal as hal;
 
 // Halt on panic
 use panic_halt as _;
@@ -16,14 +23,18 @@ use usbd_hid::descriptor::generator_prelude::*;
 use usbd_hid::descriptor::MouseReport;
 use usbd_hid::hid_class::HIDClass;
 
-/// The USB Device Driver (shared with the interrupt).
+// The USB Device Driver (shared with the interrupt).
 static mut USB_DEVICE: Option<UsbDevice<hal::usb::UsbBus>> = None;
 
-/// The USB Bus Driver (shared with the interrupt).
+// The USB Bus Driver (shared with the interrupt).
 static mut USB_BUS: Option<UsbBusAllocator<hal::usb::UsbBus>> = None;
 
-/// The USB Human Interface Device Driver (shared with the interrupt).
+// The USB Human Interface Device Driver (shared with the interrupt).
 static mut USB_HID: Option<HIDClass<hal::usb::UsbBus>> = None;
+
+// Add global allocator
+#[global_allocator]
+static HEAP: Heap = Heap::empty();
 
 #[link_section = ".boot2"]
 #[used]
@@ -33,6 +44,14 @@ const XTAL_FREQ_HZ: u32 = 12_000_000u32;
 
 #[rp2040_hal::entry]
 fn main() -> ! {
+    // Init global allocator
+    {
+        use core::mem::MaybeUninit;
+        const HEAP_SIZE: usize = 1024;
+        static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
+        unsafe { HEAP.init(HEAP_MEM.as_ptr() as usize, HEAP_SIZE) }
+    }
+
     // Grab our singleton objects
     let mut pac = pac::Peripherals::take().unwrap();
 
@@ -110,30 +129,56 @@ fn main() -> ! {
     };
     let core = pac::CorePeripherals::take().unwrap();
     let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
+    let sio = hal::Sio::new(pac.SIO);
+    let pins = hal::gpio::Pins::new(
+        pac.IO_BANK0,
+        pac.PADS_BANK0,
+        sio.gpio_bank0,
+        &mut pac.RESETS,
+    );
+
+    let mut out: Vec<Box<dyn OutputPin<Error = hal::gpio::Error>>> = vec![
+        Box::new(pins.gpio10.into_push_pull_output()),
+        Box::new(pins.gpio11.into_push_pull_output()),
+        Box::new(pins.gpio12.into_push_pull_output()),
+    ];
+
+    let mut inp: Vec<Box<dyn InputPin<Error = hal::gpio::Error>>> = vec![
+        Box::new(pins.gpio7.into_pull_down_input()),
+        Box::new(pins.gpio8.into_pull_down_input()),
+        Box::new(pins.gpio9.into_pull_down_input()),
+    ];
+
+    let mut buttons: [bool; 9] = [
+        false, false, false, false, false, false, false, false, false,
+    ];
 
     // Move the cursor up and down every 200ms
     loop {
-        delay.delay_ms(100);
+        let mut button = 0;
+        for pinx in &mut out {
+            pinx.set_high().unwrap();
+            for piny in &mut inp {
+                if piny.is_high().unwrap() {
+                    if !buttons[button] {
+                        let rep_up = MouseReport {
+                            x: 0,
+                            y: 100,
+                            buttons: 0,
+                            wheel: 0,
+                            pan: 0,
+                        };
+                        push_mouse_movement(rep_up).ok().unwrap_or(0);
+                        buttons[button] = true;
+                    }
+                } else {
+                    buttons[button] = false;
+                }
 
-        let rep_up = MouseReport {
-            x: 0,
-            y: 4,
-            buttons: 0,
-            wheel: 0,
-            pan: 0,
-        };
-        push_mouse_movement(rep_up).ok().unwrap_or(0);
-
-        delay.delay_ms(100);
-
-        let rep_down = MouseReport {
-            x: 0,
-            y: -4,
-            buttons: 0,
-            wheel: 0,
-            pan: 0,
-        };
-        push_mouse_movement(rep_down).ok().unwrap_or(0);
+                button += 1;
+            }
+            pinx.set_low().unwrap();
+        }
     }
 }
 
